@@ -246,12 +246,26 @@ NTPC,NTPC-ELEC-805,Copper armored cable 3C x 16 Sqmm,Copper Cable Armoured 3 Cor
     }
   };
 
-  // Cross-CPSE Discovery Filtering
+  // Pagination and Filter States for ultra-smooth 60fps performance
+  const [discoveryPage, setDiscoveryPage] = useState<number>(1);
+  const [matchingPage, setMatchingPage] = useState<number>(1);
+  const [matchingFilterStatus, setMatchingFilterStatus] = useState<string>('ALL');
+  const [matchingFilterCat, setMatchingFilterCat] = useState<string>('ALL');
+  const [matchingSearchQuery, setMatchingSearchQuery] = useState<string>('');
+  const [mappingsPage, setMappingsPage] = useState<number>(1);
+  const [mappingsSearchQuery, setMappingsSearchQuery] = useState<string>('');
+  const [auditPage, setAuditPage] = useState<number>(1);
+  const [auditSearchQuery, setAuditSearchQuery] = useState<string>('');
+
+  const DISCOVERY_PER_PAGE = 12;
+  const MATCHING_PER_PAGE = 10;
+  const MAPPINGS_PER_PAGE = 15;
+  const AUDIT_PER_PAGE = 15;
+
+  // Cross-CPSE Discovery Filtering with Pagination
   const filteredDiscoveryMaterials = useMemo(() => {
-    if (!searchQuery && searchCategory === 'ALL') return materials.slice(0, 50); // limit for performance
-    
     return materials.filter(m => {
-      const matchesSearch = 
+      const matchesSearch = !searchQuery || 
         m.Description.toLowerCase().includes(searchQuery.toLowerCase()) ||
         m.Material_Code.toLowerCase().includes(searchQuery.toLowerCase()) ||
         m.Specification.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -262,13 +276,40 @@ NTPC,NTPC-ELEC-805,Copper armored cable 3C x 16 Sqmm,Copper Cable Armoured 3 Cor
     });
   }, [materials, searchQuery, searchCategory]);
 
-  // Find linked CPSE codes for discovery expansion card
-  const getLinkedCpseMaterials = (item: Material) => {
-    // Check if there is an approved mapping containing this material code
-    const mapping = mappings.find(m => 
-      m.linkedMaterials.some(lm => lm.Material_Code === item.Material_Code)
-    );
+  const totalDiscoveryPages = Math.max(1, Math.ceil(filteredDiscoveryMaterials.length / DISCOVERY_PER_PAGE));
+  const paginatedDiscoveryMaterials = useMemo(() => {
+    const start = (discoveryPage - 1) * DISCOVERY_PER_PAGE;
+    return filteredDiscoveryMaterials.slice(start, start + DISCOVERY_PER_PAGE);
+  }, [filteredDiscoveryMaterials, discoveryPage]);
 
+  // Fast O(1) Hash Map indices for instant cross-CPSE lookups without lag
+  const mappingByCode = useMemo(() => {
+    const map = new Map<string, CommonCodeMapping>();
+    for (const m of mappings) {
+      for (const lm of m.linkedMaterials) {
+        map.set(lm.Material_Code, m);
+      }
+    }
+    return map;
+  }, [mappings]);
+
+  const strongMatchesByCode = useMemo(() => {
+    const map = new Map<string, MatchCandidate[]>();
+    for (const match of matches) {
+      if (match.status !== 'STRONG_MATCH') continue;
+      const m1Code = match.material1.Material_Code;
+      const m2Code = match.material2.Material_Code;
+      if (!map.has(m1Code)) map.set(m1Code, []);
+      if (!map.has(m2Code)) map.set(m2Code, []);
+      map.get(m1Code)!.push(match);
+      map.get(m2Code)!.push(match);
+    }
+    return map;
+  }, [matches]);
+
+  // Instant O(1) lookup
+  const getLinkedCpseMaterials = (item: Material) => {
+    const mapping = mappingByCode.get(item.Material_Code);
     if (mapping) {
       return {
         commonCode: mapping.commonCode,
@@ -277,12 +318,7 @@ NTPC,NTPC-ELEC-805,Copper armored cable 3C x 16 Sqmm,Copper Cable Armoured 3 Cor
       };
     }
 
-    // If not officially harmonized, look through matches to see if there is a Strong Match candidate
-    const strongMatches = matches.filter(match => 
-      (match.material1.Material_Code === item.Material_Code || match.material2.Material_Code === item.Material_Code) &&
-      match.status === 'STRONG_MATCH'
-    );
-
+    const strongMatches = strongMatchesByCode.get(item.Material_Code) || [];
     const matchLinks = strongMatches.map(match => {
       const other = match.material1.Material_Code === item.Material_Code ? match.material2 : match.material1;
       return {
@@ -300,6 +336,66 @@ NTPC,NTPC-ELEC-805,Copper armored cable 3C x 16 Sqmm,Copper Cable Armoured 3 Cor
       links: matchLinks
     };
   };
+
+  // Filtered & Paginated Matches
+  const filteredMatches = useMemo(() => {
+    return matches.filter(m => {
+      const matchesStatus = matchingFilterStatus === 'ALL' || m.status === matchingFilterStatus;
+      const matchesCategory = matchingFilterCat === 'ALL' || m.material1.Category === matchingFilterCat || m.material2.Category === matchingFilterCat;
+      const matchesSearch = !matchingSearchQuery ||
+        m.material1.Description.toLowerCase().includes(matchingSearchQuery.toLowerCase()) ||
+        m.material2.Description.toLowerCase().includes(matchingSearchQuery.toLowerCase()) ||
+        m.material1.Material_Code.toLowerCase().includes(matchingSearchQuery.toLowerCase()) ||
+        m.material2.Material_Code.toLowerCase().includes(matchingSearchQuery.toLowerCase());
+      return matchesStatus && matchesCategory && matchesSearch;
+    });
+  }, [matches, matchingFilterStatus, matchingFilterCat, matchingSearchQuery]);
+
+  const totalMatchingPages = Math.max(1, Math.ceil(filteredMatches.length / MATCHING_PER_PAGE));
+  const paginatedMatches = useMemo(() => {
+    const start = (matchingPage - 1) * MATCHING_PER_PAGE;
+    return filteredMatches.slice(start, start + MATCHING_PER_PAGE);
+  }, [filteredMatches, matchingPage]);
+
+  // Filtered & Paginated Mappings
+  const filteredMappings = useMemo(() => {
+    return mappings.filter(m => {
+      if (!mappingsSearchQuery) return true;
+      const q = mappingsSearchQuery.toLowerCase();
+      return m.commonCode.toLowerCase().includes(q) ||
+        m.standardDescription.toLowerCase().includes(q) ||
+        m.category.toLowerCase().includes(q) ||
+        m.linkedMaterials.some(lm => lm.PSU_Name.toLowerCase().includes(q) || lm.Material_Code.toLowerCase().includes(q) || lm.Description.toLowerCase().includes(q));
+    });
+  }, [mappings, mappingsSearchQuery]);
+
+  const totalMappingsPages = Math.max(1, Math.ceil(filteredMappings.length / MAPPINGS_PER_PAGE));
+  const paginatedMappings = useMemo(() => {
+    const start = (mappingsPage - 1) * MAPPINGS_PER_PAGE;
+    return filteredMappings.slice(start, start + MAPPINGS_PER_PAGE);
+  }, [filteredMappings, mappingsPage]);
+
+  // Filtered & Paginated Audit Logs
+  const filteredAuditLogs = useMemo(() => {
+    return auditLogs.filter(log => {
+      if (!auditSearchQuery) return true;
+      const q = auditSearchQuery.toLowerCase();
+      return log.id.toLowerCase().includes(q) ||
+        log.user.toLowerCase().includes(q) ||
+        log.action.toLowerCase().includes(q) ||
+        log.material1Code.toLowerCase().includes(q) ||
+        log.material2Code.toLowerCase().includes(q) ||
+        log.material1Desc.toLowerCase().includes(q) ||
+        log.material2Desc.toLowerCase().includes(q) ||
+        log.finalDecision.toLowerCase().includes(q);
+    });
+  }, [auditLogs, auditSearchQuery]);
+
+  const totalAuditPages = Math.max(1, Math.ceil(filteredAuditLogs.length / AUDIT_PER_PAGE));
+  const paginatedAuditLogs = useMemo(() => {
+    const start = (auditPage - 1) * AUDIT_PER_PAGE;
+    return filteredAuditLogs.slice(start, start + AUDIT_PER_PAGE);
+  }, [filteredAuditLogs, auditPage]);
 
   // Categories list
   const categories = ["ALL", "PIPES", "VALVES", "ELECTRICAL", "FITTINGS", "PUMPS", "FLANGES", "GASKETS", "INSTRUMENTATION"];
@@ -1060,7 +1156,10 @@ NTPC,NTPC-ELEC-805,Copper armored cable 3C x 16 Sqmm,Copper Cable Armoured 3 Cor
                   <input
                     type="text"
                     value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
+                    onChange={(e) => {
+                      setSearchQuery(e.target.value);
+                      setDiscoveryPage(1);
+                    }}
                     placeholder="Search by code or description (e.g., 'Gate Valve', 'Pipe 100mm', 'ONGC-PIPE-001')..."
                     className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 text-xs rounded-lg focus:outline-hidden focus:ring-2 focus:ring-blue-900 focus:bg-white transition-all font-semibold"
                   />
@@ -1069,7 +1168,10 @@ NTPC,NTPC-ELEC-805,Copper armored cable 3C x 16 Sqmm,Copper Cable Armoured 3 Cor
                 <div className="w-full md:w-48">
                   <select
                     value={searchCategory}
-                    onChange={(e) => setSearchCategory(e.target.value)}
+                    onChange={(e) => {
+                      setSearchCategory(e.target.value);
+                      setDiscoveryPage(1);
+                    }}
                     className="w-full bg-slate-50 border border-slate-200 text-xs rounded-lg p-2.5 font-semibold text-slate-700 focus:outline-hidden focus:ring-2 focus:ring-blue-900"
                   >
                     {categories.map(cat => (
@@ -1086,7 +1188,9 @@ NTPC,NTPC-ELEC-805,Copper armored cable 3C x 16 Sqmm,Copper Cable Armoured 3 Cor
                 <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
                   Matches & Candidates found ({filteredDiscoveryMaterials.length})
                 </span>
-                <span className="text-[11px] text-slate-400">Showing top relevant search matches</span>
+                <span className="text-[11px] text-slate-400">
+                  Page {discoveryPage} of {totalDiscoveryPages}
+                </span>
               </div>
 
               {filteredDiscoveryMaterials.length === 0 ? (
@@ -1095,7 +1199,7 @@ NTPC,NTPC-ELEC-805,Copper armored cable 3C x 16 Sqmm,Copper Cable Armoured 3 Cor
                 </div>
               ) : (
                 <div className="grid grid-cols-1 gap-4">
-                  {filteredDiscoveryMaterials.map((item) => {
+                  {paginatedDiscoveryMaterials.map((item) => {
                     const statusInfo = getLinkedCpseMaterials(item);
                     return (
                       <div key={item.id} className="bg-white p-5 rounded-xl border border-slate-200 shadow-xs hover:border-blue-400 transition-all flex flex-col md:flex-row justify-between gap-4">
@@ -1174,7 +1278,7 @@ NTPC,NTPC-ELEC-805,Copper armored cable 3C x 16 Sqmm,Copper Cable Armoured 3 Cor
                                   alert("This item matches, but is already approved or cleared.");
                                 }
                               }}
-                              className="mt-3 text-[11px] font-bold text-blue-900 hover:text-blue-700 flex items-center gap-1"
+                              className="mt-3 text-[11px] font-bold text-blue-900 hover:text-blue-700 flex items-center gap-1 cursor-pointer"
                             >
                               Open in Decision Center <ArrowRight className="w-3 h-3" />
                             </button>
@@ -1186,6 +1290,29 @@ NTPC,NTPC-ELEC-805,Copper armored cable 3C x 16 Sqmm,Copper Cable Armoured 3 Cor
                   })}
                 </div>
               )}
+
+              {/* Discovery Pagination Bar */}
+              {totalDiscoveryPages > 1 && (
+                <div className="flex justify-between items-center bg-white p-4 rounded-xl border border-slate-200 mt-4 text-xs">
+                  <button
+                    onClick={() => setDiscoveryPage(p => Math.max(1, p - 1))}
+                    disabled={discoveryPage === 1}
+                    className="px-3 py-1.5 rounded-lg border border-slate-200 text-slate-700 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed font-semibold"
+                  >
+                    Previous
+                  </button>
+                  <span className="text-slate-500 font-semibold">
+                    Page {discoveryPage} of {totalDiscoveryPages} ({filteredDiscoveryMaterials.length} materials)
+                  </span>
+                  <button
+                    onClick={() => setDiscoveryPage(p => Math.min(totalDiscoveryPages, p + 1))}
+                    disabled={discoveryPage === totalDiscoveryPages}
+                    className="px-3 py-1.5 rounded-lg border border-slate-200 text-slate-700 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed font-semibold"
+                  >
+                    Next
+                  </button>
+                </div>
+              )}
             </div>
 
           </div>
@@ -1195,22 +1322,77 @@ NTPC,NTPC-ELEC-805,Copper armored cable 3C x 16 Sqmm,Copper Cable Armoured 3 Cor
         {activeTab === 'matching' && (
           <div className="space-y-6">
             
-            <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-xs">
-              <h3 className="text-base font-bold text-slate-800 mb-2">AI-Driven Pairwise Match Candidates</h3>
-              <p className="text-xs text-slate-500">
-                The harmonization engine automatically evaluates pairs of materials inside standard categories. High scoring pairings are proposed for Human Review.
-              </p>
+            <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-xs space-y-4">
+              <div>
+                <h3 className="text-base font-bold text-slate-800 mb-1">AI-Driven Pairwise Match Candidates</h3>
+                <p className="text-xs text-slate-500">
+                  The harmonization engine automatically evaluates pairs of materials inside standard categories. High scoring pairings are proposed for Human Review.
+                </p>
+              </div>
+
+              {/* Match Filter & Search Toolbar */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-2 border-t border-slate-100">
+                <div className="relative">
+                  <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-3" />
+                  <input
+                    type="text"
+                    value={matchingSearchQuery}
+                    onChange={(e) => {
+                      setMatchingSearchQuery(e.target.value);
+                      setMatchingPage(1);
+                    }}
+                    placeholder="Search match descriptions/codes..."
+                    className="w-full pl-9 pr-3 py-2 bg-slate-50 border border-slate-200 text-xs rounded-lg focus:outline-hidden font-medium"
+                  />
+                </div>
+
+                <div>
+                  <select
+                    value={matchingFilterStatus}
+                    onChange={(e) => {
+                      setMatchingFilterStatus(e.target.value);
+                      setMatchingPage(1);
+                    }}
+                    className="w-full bg-slate-50 border border-slate-200 text-xs rounded-lg p-2 font-semibold text-slate-700 focus:outline-hidden"
+                  >
+                    <option value="ALL">All Statuses ({matches.length})</option>
+                    <option value="STRONG_MATCH">Strong Matches (&ge;80%) ({matches.filter(m => m.status === 'STRONG_MATCH').length})</option>
+                    <option value="NEEDS_REVIEW">Needs Review (65-79%) ({matches.filter(m => m.status === 'NEEDS_REVIEW').length})</option>
+                    <option value="CRITICAL_MISMATCH">Critical Spec Conflicts ({matches.filter(m => m.status === 'CRITICAL_MISMATCH').length})</option>
+                  </select>
+                </div>
+
+                <div>
+                  <select
+                    value={matchingFilterCat}
+                    onChange={(e) => {
+                      setMatchingFilterCat(e.target.value);
+                      setMatchingPage(1);
+                    }}
+                    className="w-full bg-slate-50 border border-slate-200 text-xs rounded-lg p-2 font-semibold text-slate-700 focus:outline-hidden"
+                  >
+                    {categories.map(cat => (
+                      <option key={cat} value={cat}>{cat === 'ALL' ? 'All Categories' : cat}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
             </div>
 
             {/* Matches list */}
             <div className="space-y-4">
-              {matches.length === 0 ? (
+              <div className="flex justify-between items-center text-xs text-slate-500 font-semibold">
+                <span>Showing {filteredMatches.length} Candidate Pairs</span>
+                <span>Page {matchingPage} of {totalMatchingPages}</span>
+              </div>
+
+              {filteredMatches.length === 0 ? (
                 <div className="bg-white p-12 text-center border border-slate-200 rounded-xl">
-                  <p className="text-sm text-slate-500">No matching candidates currently requiring review!</p>
+                  <p className="text-sm text-slate-500">No matching candidates found for current filter criteria.</p>
                 </div>
               ) : (
                 <div className="grid grid-cols-1 gap-4">
-                  {matches.map((match) => {
+                  {paginatedMatches.map((match) => {
                     const isMismatched = match.status === 'CRITICAL_MISMATCH';
                     const isStrong = match.status === 'STRONG_MATCH';
                     
@@ -1321,7 +1503,7 @@ NTPC,NTPC-ELEC-805,Copper armored cable 3C x 16 Sqmm,Copper Cable Armoured 3 Cor
                               setSelectedMatch(match);
                               setActiveTab('review');
                             }}
-                            className="mt-4 w-full bg-slate-900 text-white font-extrabold hover:bg-blue-900 py-1.5 px-3 text-[10px] rounded-lg shadow-sm tracking-wide uppercase transition-all"
+                            className="mt-4 w-full bg-slate-900 text-white font-extrabold hover:bg-blue-900 py-1.5 px-3 text-[10px] rounded-lg shadow-sm tracking-wide uppercase transition-all cursor-pointer"
                           >
                             Execute Human Review
                           </button>
@@ -1330,6 +1512,29 @@ NTPC,NTPC-ELEC-805,Copper armored cable 3C x 16 Sqmm,Copper Cable Armoured 3 Cor
                       </div>
                     );
                   })}
+                </div>
+              )}
+
+              {/* Matching Pagination Bar */}
+              {totalMatchingPages > 1 && (
+                <div className="flex justify-between items-center bg-white p-4 rounded-xl border border-slate-200 mt-4 text-xs">
+                  <button
+                    onClick={() => setMatchingPage(p => Math.max(1, p - 1))}
+                    disabled={matchingPage === 1}
+                    className="px-3 py-1.5 rounded-lg border border-slate-200 text-slate-700 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed font-semibold cursor-pointer"
+                  >
+                    Previous
+                  </button>
+                  <span className="text-slate-500 font-semibold">
+                    Page {matchingPage} of {totalMatchingPages} ({filteredMatches.length} pairs)
+                  </span>
+                  <button
+                    onClick={() => setMatchingPage(p => Math.min(totalMatchingPages, p + 1))}
+                    disabled={matchingPage === totalMatchingPages}
+                    className="px-3 py-1.5 rounded-lg border border-slate-200 text-slate-700 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed font-semibold cursor-pointer"
+                  >
+                    Next
+                  </button>
                 </div>
               )}
             </div>
@@ -1621,18 +1826,22 @@ NTPC,NTPC-ELEC-805,Copper armored cable 3C x 16 Sqmm,Copper Cable Armoured 3 Cor
 
                   {/* Active Match Candidates Selector */}
                   <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-3">
-                    <h5 className="font-extrabold text-xs text-slate-800 uppercase tracking-wider">Awaiting Decisions ({matches.filter(m => m.status === 'NEEDS_REVIEW').length})</h5>
-                    <div className="max-h-48 overflow-y-auto space-y-2">
-                      {matches.map((item) => (
+                    <div className="flex justify-between items-center">
+                      <h5 className="font-extrabold text-xs text-slate-800 uppercase tracking-wider">
+                        Awaiting Decisions ({matches.filter(m => m.status === 'NEEDS_REVIEW').length})
+                      </h5>
+                    </div>
+                    <div className="max-h-56 overflow-y-auto space-y-2 pr-1">
+                      {matches.slice(0, 30).map((item) => (
                         <button
                           key={item.id}
                           onClick={() => {
                             setSelectedMatch(item);
                             setReviewActionMsg(null);
                           }}
-                          className={`w-full text-left p-2.5 rounded-lg border text-xs flex justify-between items-center transition-all ${
+                          className={`w-full text-left p-2.5 rounded-lg border text-xs flex justify-between items-center transition-all cursor-pointer ${
                             selectedMatch.id === item.id 
-                              ? 'bg-blue-50/70 border-blue-400 font-bold text-blue-950' 
+                              ? 'bg-blue-50/70 border-blue-400 font-bold text-blue-950 shadow-xs' 
                               : 'border-slate-150 hover:bg-slate-50 font-medium'
                           }`}
                         >
@@ -1664,22 +1873,38 @@ NTPC,NTPC-ELEC-805,Copper armored cable 3C x 16 Sqmm,Copper Cable Armoured 3 Cor
         {activeTab === 'mappings' && (
           <div className="space-y-6">
             
-            <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-xs">
-              <h3 className="text-base font-bold text-slate-800 mb-2">Centralized National Material Registry (NMC)</h3>
-              <p className="text-xs text-slate-500">
-                Official assigned Common Codes. This establishes a universal standard reference while leaving each CPSE's local operational codes perfectly preserved.
-              </p>
+            <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-xs flex flex-col md:flex-row justify-between items-center gap-4">
+              <div>
+                <h3 className="text-base font-bold text-slate-800 mb-1">Centralized National Material Registry (NMC)</h3>
+                <p className="text-xs text-slate-500">
+                  Official assigned Common Codes. This establishes a universal standard reference while leaving each CPSE's local operational codes perfectly preserved.
+                </p>
+              </div>
+              <div className="w-full md:w-72 relative">
+                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-3" />
+                <input
+                  type="text"
+                  value={mappingsSearchQuery}
+                  onChange={(e) => {
+                    setMappingsSearchQuery(e.target.value);
+                    setMappingsPage(1);
+                  }}
+                  placeholder="Search code, PSU, or description..."
+                  className="w-full pl-9 pr-3 py-2 bg-slate-50 border border-slate-200 text-xs rounded-lg focus:outline-hidden font-medium"
+                />
+              </div>
             </div>
 
             {/* Registry table */}
             <div className="bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden">
-              <div className="p-4 bg-slate-900 text-white font-extrabold text-xs uppercase tracking-wider">
-                Common National Material Mappings ({mappings.length})
+              <div className="p-4 bg-slate-900 text-white font-extrabold text-xs uppercase tracking-wider flex justify-between items-center">
+                <span>Common National Material Mappings ({filteredMappings.length})</span>
+                <span className="text-[10px] text-slate-400 font-semibold normal-case">Page {mappingsPage} of {totalMappingsPages}</span>
               </div>
 
-              {mappings.length === 0 ? (
+              {filteredMappings.length === 0 ? (
                 <div className="p-12 text-center text-slate-500 text-sm">
-                  No Common National Material Codes currently assigned. Execute reviews to create mappings.
+                  No Common National Material Codes found matching search criteria.
                 </div>
               ) : (
                 <div className="overflow-x-auto">
@@ -1693,7 +1918,7 @@ NTPC,NTPC-ELEC-805,Copper armored cable 3C x 16 Sqmm,Copper Cable Armoured 3 Cor
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100 font-medium">
-                      {mappings.map((item) => (
+                      {paginatedMappings.map((item) => (
                         <tr key={item.commonCode} className="hover:bg-slate-50">
                           <td className="p-4 shrink-0 font-black text-blue-900 tracking-wider">
                             {item.commonCode}
@@ -1727,6 +1952,29 @@ NTPC,NTPC-ELEC-805,Copper armored cable 3C x 16 Sqmm,Copper Cable Armoured 3 Cor
                   </table>
                 </div>
               )}
+
+              {/* Mappings Pagination */}
+              {totalMappingsPages > 1 && (
+                <div className="flex justify-between items-center bg-white p-3 border-t border-slate-100 text-xs">
+                  <button
+                    onClick={() => setMappingsPage(p => Math.max(1, p - 1))}
+                    disabled={mappingsPage === 1}
+                    className="px-3 py-1 rounded-lg border border-slate-200 text-slate-700 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed font-semibold cursor-pointer"
+                  >
+                    Previous
+                  </button>
+                  <span className="text-slate-500 font-semibold text-[11px]">
+                    Page {mappingsPage} of {totalMappingsPages} ({filteredMappings.length} mappings)
+                  </span>
+                  <button
+                    onClick={() => setMappingsPage(p => Math.min(totalMappingsPages, p + 1))}
+                    disabled={mappingsPage === totalMappingsPages}
+                    className="px-3 py-1 rounded-lg border border-slate-200 text-slate-700 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed font-semibold cursor-pointer"
+                  >
+                    Next
+                  </button>
+                </div>
+              )}
             </div>
 
           </div>
@@ -1745,7 +1993,7 @@ NTPC,NTPC-ELEC-805,Copper armored cable 3C x 16 Sqmm,Copper Cable Armoured 3 Cor
               </div>
               <button
                 onClick={loadSampleUploadData}
-                className="bg-blue-900 text-white font-extrabold hover:bg-blue-800 text-xs px-4 py-2 rounded-lg flex items-center gap-1.5 tracking-wide shadow-xs shrink-0"
+                className="bg-blue-900 text-white font-extrabold hover:bg-blue-800 text-xs px-4 py-2 rounded-lg flex items-center gap-1.5 tracking-wide shadow-xs shrink-0 cursor-pointer"
               >
                 <FileText className="w-4 h-4" /> Load Sample Test CSV
               </button>
@@ -1783,7 +2031,7 @@ NTPC,NTPC-ELEC-805,Copper armored cable 3C x 16 Sqmm,Copper Cable Armoured 3 Cor
                   <button
                     type="submit"
                     disabled={uploading || !rawCsvText.trim()}
-                    className={`w-full py-2.5 px-4 rounded-lg font-extrabold text-xs flex items-center justify-center gap-2 text-white shadow-xs transition-all ${
+                    className={`w-full py-2.5 px-4 rounded-lg font-extrabold text-xs flex items-center justify-center gap-2 text-white shadow-xs transition-all cursor-pointer ${
                       uploading || !rawCsvText.trim() ? 'bg-slate-300 cursor-not-allowed' : 'bg-blue-900 hover:bg-blue-800'
                     }`}
                   >
@@ -1900,22 +2148,38 @@ NTPC,NTPC-ELEC-805,Copper armored cable 3C x 16 Sqmm,Copper Cable Armoured 3 Cor
         {activeTab === 'audit' && (
           <div className="space-y-6">
             
-            <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-xs">
-              <h3 className="text-base font-bold text-slate-800 mb-2">Decisions & Operations Log Sheet</h3>
-              <p className="text-xs text-slate-500">
-                Chronological ledger tracking Ministry evaluations, approvals, code generation events, and custom data loading activities during this session.
-              </p>
+            <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-xs flex flex-col md:flex-row justify-between items-center gap-4">
+              <div>
+                <h3 className="text-base font-bold text-slate-800 mb-1">Decisions & Operations Log Sheet</h3>
+                <p className="text-xs text-slate-500">
+                  Chronological ledger tracking Ministry evaluations, approvals, code generation events, and custom data loading activities during this session.
+                </p>
+              </div>
+              <div className="w-full md:w-72 relative">
+                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-3" />
+                <input
+                  type="text"
+                  value={auditSearchQuery}
+                  onChange={(e) => {
+                    setAuditSearchQuery(e.target.value);
+                    setAuditPage(1);
+                  }}
+                  placeholder="Search user, action, code, or decision..."
+                  className="w-full pl-9 pr-3 py-2 bg-slate-50 border border-slate-200 text-xs rounded-lg focus:outline-hidden font-medium"
+                />
+              </div>
             </div>
 
             {/* Audit log table */}
             <div className="bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden">
-              <div className="p-4 bg-slate-900 text-white font-extrabold text-xs uppercase tracking-wider">
-                Regulatory Action Trail ({auditLogs.length})
+              <div className="p-4 bg-slate-900 text-white font-extrabold text-xs uppercase tracking-wider flex justify-between items-center">
+                <span>Regulatory Action Trail ({filteredAuditLogs.length})</span>
+                <span className="text-[10px] text-slate-400 font-semibold normal-case">Page {auditPage} of {totalAuditPages}</span>
               </div>
 
-              {auditLogs.length === 0 ? (
+              {filteredAuditLogs.length === 0 ? (
                 <div className="p-12 text-center text-slate-500 text-sm">
-                  No administrative actions logged in current session. Open the Decision Center to review match suggestions.
+                  No administrative actions found matching search criteria.
                 </div>
               ) : (
                 <div className="overflow-x-auto">
@@ -1932,7 +2196,7 @@ NTPC,NTPC-ELEC-805,Copper armored cable 3C x 16 Sqmm,Copper Cable Armoured 3 Cor
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100 font-medium">
-                      {auditLogs.map((log) => (
+                      {paginatedAuditLogs.map((log) => (
                         <tr key={log.id} className="hover:bg-slate-50">
                           <td className="p-4 shrink-0 text-slate-400 font-bold flex items-center gap-1">
                             <Clock className="w-3.5 h-3.5 text-slate-400 shrink-0" /> {log.timestamp}
@@ -1966,6 +2230,29 @@ NTPC,NTPC-ELEC-805,Copper armored cable 3C x 16 Sqmm,Copper Cable Armoured 3 Cor
                       ))}
                     </tbody>
                   </table>
+                </div>
+              )}
+
+              {/* Audit Pagination */}
+              {totalAuditPages > 1 && (
+                <div className="flex justify-between items-center bg-white p-3 border-t border-slate-100 text-xs">
+                  <button
+                    onClick={() => setAuditPage(p => Math.max(1, p - 1))}
+                    disabled={auditPage === 1}
+                    className="px-3 py-1 rounded-lg border border-slate-200 text-slate-700 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed font-semibold cursor-pointer"
+                  >
+                    Previous
+                  </button>
+                  <span className="text-slate-500 font-semibold text-[11px]">
+                    Page {auditPage} of {totalAuditPages} ({filteredAuditLogs.length} actions)
+                  </span>
+                  <button
+                    onClick={() => setAuditPage(p => Math.min(totalAuditPages, p + 1))}
+                    disabled={auditPage === totalAuditPages}
+                    className="px-3 py-1 rounded-lg border border-slate-200 text-slate-700 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed font-semibold cursor-pointer"
+                  >
+                    Next
+                  </button>
                 </div>
               )}
             </div>

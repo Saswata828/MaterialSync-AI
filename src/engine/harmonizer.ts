@@ -514,6 +514,8 @@ export function runMatchingPipeline(allMaterials: Material[]): MatchCandidate[] 
     const n = list.length;
     const isKnownCategory = ["CABLES", "MS ANGLES", "BEARINGS", "ELECTRICAL MOTORS", "FASTENERS", "STEEL PIPES", "LUBRICANTS", "SAFETY EQUIPMENT", "PIPES", "VALVES", "ELECTRICAL", "FITTINGS", "PUMPS", "FLANGES", "GASKETS", "INSTRUMENTATION"].includes(cat.toUpperCase().trim());
 
+    const catMatches: MatchCandidate[] = [];
+
     for (let i = 0; i < n; i++) {
       for (let j = i + 1; j < n; j++) {
         const m1 = list[i];
@@ -525,7 +527,7 @@ export function runMatchingPipeline(allMaterials: Material[]): MatchCandidate[] 
         const semanticSim = tfidf.cosineSimilarity(vec1, vec2);
         const semanticScore = Math.round(semanticSim * 100);
 
-        if (semanticScore < 50) continue;
+        if (semanticScore < 60) continue;
 
         const attrs1 = extractAttributesByCategory(cat, m1.Description, m1.Specification);
         const attrs2 = extractAttributesByCategory(cat, m2.Description, m2.Specification);
@@ -584,7 +586,7 @@ export function runMatchingPipeline(allMaterials: Material[]): MatchCandidate[] 
             confidence = Math.min(confidence, 79);
             explanationList.push(`! Dynamic Extraction Fallback: Category not in standard registry`);
           } else {
-            if (confidence >= 85) {
+            if (confidence >= 80) {
               status = 'STRONG_MATCH';
               reason = "Equivalent material matching across key attributes.";
             } else if (confidence >= 65) {
@@ -602,7 +604,7 @@ export function runMatchingPipeline(allMaterials: Material[]): MatchCandidate[] 
           explanationList.push(`! Duplicate check flagged: Both materials belong to ${m1.PSU_Name}`);
         }
 
-        newMatches.push({
+        catMatches.push({
           id: `${m1.Material_Code}_${m2.Material_Code}`,
           material1: m1,
           material2: m2,
@@ -629,6 +631,11 @@ export function runMatchingPipeline(allMaterials: Material[]): MatchCandidate[] 
         });
       }
     }
+
+    // Sort category matches by confidence descending and take top quality candidates
+    catMatches.sort((a, b) => b.confidence - a.confidence);
+    const topCatMatches = catMatches.slice(0, 30);
+    newMatches.push(...topCatMatches);
   });
 
   newMatches.sort((a, b) => b.confidence - a.confidence);
