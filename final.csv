@@ -1,0 +1,28 @@
+PSU_Name,Material_Code,Description,Specification,Unit_of_Measure,Category,HSN_Code
+PowerGrid PSU,PG-1004-20,MS Seamless Pipe 100mm NB Sch 40,100mm NB Sch 40,Meter,Steel Pipes,7304
+RailPSU,RP-01007,"Mild Steel Seamless Pipe, 100mm NB Sch 40",100mm NB Sch 40,Meter,Steel Pipes,7304
+EnergyCorp,EC/1007/56,MS Seamless Pipe 10cm NB Sch 40,100mm NB Sch 40,Meter,Steel Pipes,7304
+EnergyCorp,EC/1033/52,MS ERW PIPE 150mm NB,150mm NB,Meter,Steel Pipes,7306
+PowerGrid PSU,PG-1016-16,"Induction Motor, 5 HP 1440 RPM 415V",5 HP 1440 RPM 415V,Nos,Electrical Motors,8501
+RailPSU,RP-01012,Induction Motor - 5 HP 1440 RPM 415V,5 HP 1440 RPM 415V,Nos,Electrical Motors,8501
+CoalIndia Sub,CI/01007,INDUCTION MOTOR 5 HP 1440 RPM 415V,5 HP 1440 RPM 415V,Nos,Electrical Motors,8501
+EnergyCorp,EC/1049/22,Induction Motor,10 HP 960 RPM 415V,Nos,Electrical Motors,8501
+CoalIndia Sub,CI/01055,Control Cable 2 Core 4 Sq mm Copper,2 Core 4 Sq MM Copper,Meter,Cables,8544
+PowerGrid PSU,PG-1045-30,"Control Cable, 2 Core 4 Sq mm Copper",2 Core 4 Sq MM Copper,Meter,Cables,8544
+SteelCorp India,SC-01054,Control Cable - 2 Core 4 Sq mm Copper,2 Core 4 Sq mm Copper,Meter,Cables,8544
+EnergyCorp,EC/1057/11,Control Cable 2 Core 4 Sq mm Copper,2 Core 4 Sq mm Copper,Meter,Cables,8544
+CoalIndia Sub,CI/01008,Roller Bearing NU 2308,NU 2308,Nos,Bearings,8482
+RailPSU,RP-01017,Roller Bearing - NU 2308,NU 2308,Nos,Bearings,8482
+EnergyCorp,EC/1025/92,Roller Bearing NU 2308,NU 2308,Nos,Bearings,8482
+PowerGrid PSU,PG-1027-98,Hex Nut M16 Grade 8,M16 Grade 8,Nos,Fasteners,7318
+RailPSU,RP-01027,"Hex Nut, M16 Grade 8",M16 Grade 8,Nos,Fasteners,7318
+NationalMines Ltd,NM/1004/45,MS ANGLE 40*40*5*,40x40x5mm,Kg,MS Angles,7216
+SteelCorp India,SC-01007,M.S. Angle - 40x40x5mm,40x40x5mm,Kg,MS Angles,7216
+RailPSU,RP-01010,MS Angle 40x40x5mm,40x40x5mm,Kg,MS Angles,7216
+SteelCorp India,SC-01040,MS Angle,50x50x6mm,Kg,MS Angles,7216
+EnergyCorp,EC/1043/96,Grease,Lithium Base NLGI 2,Kg,Lubricants,2710
+NationalMines Ltd,NM/1090/99,Grease Lithium Base NLGI 3,Lithium Base NLGI 3,Litre,Lubricants,2710
+PowerGrid PSU,PG-1015-92,Ear Muff SNR 27dB,SNR 27dB,Nos,Safety Equipment,6506
+SteelCorp India,SC-01016,Ear Muff - SNR 27dB,SNR 27dB,Nos,Safety Equipment,6506
+CustomCPSE,MAT-9901,Industrial Centrifuge Type-A,Type: Centrifugal, Standard: ISO 101,Nos,Machinery,8421
+SectorsInc,SEC-8821,Centrifuge Machine Type-B,Type: Centrifugal, Standard: ISO 102,Nos,Machinery,8421
