@@ -186,3 +186,47 @@ export async function sendResetDatabase(): Promise<{ success: boolean }> {
 
   return { success: true };
 }
+
+export async function sendEmailOtp(email: string): Promise<{ success: boolean; message?: string; error?: string }> {
+  try {
+    const res = await fetch('/api/auth/send-otp', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email })
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      return { success: false, error: data.error || 'Failed to send OTP.' };
+    }
+    return { success: true, message: data.message };
+  } catch (err: any) {
+    return { success: false, error: err.message || 'Network error while requesting OTP.' };
+  }
+}
+
+export async function verifyEmailOtp(email: string, otp: string): Promise<{ success: boolean; message?: string; error?: string }> {
+  try {
+    const res = await fetch('/api/auth/verify-otp', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, otp })
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      return { success: false, error: data.error || 'Invalid or expired OTP.' };
+    }
+    return { success: true, message: data.message };
+  } catch (err: any) {
+    return { success: false, error: err.message || 'Network error while verifying OTP.' };
+  }
+}
+
+export async function getAuthStatus(): Promise<{ smtpConfigured: boolean; smtpUser?: string | null }> {
+  try {
+    const res = await fetch('/api/auth/status');
+    if (res.ok) {
+      return await res.json();
+    }
+  } catch (err) {}
+  return { smtpConfigured: false };
+}

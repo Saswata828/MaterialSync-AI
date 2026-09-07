@@ -6,7 +6,8 @@ import {
 import { 
   ShieldCheck, Search, Database, Layers, CheckCircle2, AlertTriangle, 
   XCircle, UploadCloud, ArrowRight, Activity, Users, Info, RefreshCw, FileText,
-  Clock, Eye, Server, Award, ChevronRight, HelpCircle, Mail, Lock, Building2, Globe
+  Clock, Eye, Server, Award, ChevronRight, HelpCircle, Mail, Lock, Building2, Globe,
+  KeyRound, Sparkles, LogOut, Check, ExternalLink
 } from 'lucide-react';
 import { Material, MatchCandidate, CommonCodeMapping, AuditLogEntry, DashboardStats } from './types';
 import { 
@@ -14,8 +15,38 @@ import {
   sendReviewDecision, 
   sendCsvUpload, 
   sendBulkApprove, 
-  sendResetDatabase 
+  sendResetDatabase,
+  sendEmailOtp,
+  verifyEmailOtp,
+  getAuthStatus
 } from './services/api';
+import { 
+  signInWithGoogle, 
+  signOutFirebase, 
+  isFirebaseConfigured 
+} from './services/firebase';
+
+// Google Brand SVG Icon
+const GoogleIcon = () => (
+  <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24">
+    <path
+      fill="#4285F4"
+      d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.66-5.17 3.66-9.17z"
+    />
+    <path
+      fill="#34A853"
+      d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.1-6.72-4.93H1.25v3.15C3.26 21.36 7.35 24 12 24z"
+    />
+    <path
+      fill="#FBBC05"
+      d="M5.28 14.27c-.25-.72-.38-1.49-.38-2.27s.13-1.55.38-2.27V6.58H1.25C.45 8.16 0 9.94 0 12s.45 3.84 1.25 5.42l4.03-3.15z"
+    />
+    <path
+      fill="#EA4335"
+      d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.35 0 3.26 2.64 1.25 6.58l4.03 3.15c.95-2.83 3.6-4.98 6.72-4.98z"
+    />
+  </svg>
+);
 
 export default function App() {
   // Navigation tabs state
@@ -29,6 +60,20 @@ export default function App() {
   const [loginCpse, setLoginCpse] = useState<string>('ONGC');
   const [authError, setAuthError] = useState<string | null>(null);
   const [userEmail, setUserEmail] = useState<string>('');
+  
+  // Real OTP & Firebase States
+  const [authTab, setAuthTab] = useState<'google-otp' | 'password'>('google-otp');
+  const [authStep, setAuthStep] = useState<'input' | 'otp-verify'>('input');
+  const [otpCode, setOtpCode] = useState<string>('');
+  const [otpCountdown, setOtpCountdown] = useState<number>(0);
+  const [otpLoading, setOtpLoading] = useState<boolean>(false);
+  const [otpSuccessMsg, setOtpSuccessMsg] = useState<string | null>(null);
+  const [googleLoading, setGoogleLoading] = useState<boolean>(false);
+  const [currentUserPhoto, setCurrentUserPhoto] = useState<string | null>(null);
+  const [currentUserName, setCurrentUserName] = useState<string | null>(null);
+  const [authProviderType, setAuthProviderType] = useState<'google' | 'email-otp' | 'credential' | null>(null);
+  const [smtpStatus, setSmtpStatus] = useState<{ smtpConfigured: boolean; smtpUser?: string | null } | null>(null);
+
   const [adminConfigThreshold, setAdminConfigThreshold] = useState<number>(85);
   const [adminActionMsg, setAdminActionMsg] = useState<{ type: 'success' | 'error', text: string } | null>(null);
   const [adminApproving, setAdminApproving] = useState<boolean>(false);
@@ -94,7 +139,17 @@ export default function App() {
 
   useEffect(() => {
     fetchData();
+    getAuthStatus().then(status => setSmtpStatus(status)).catch(() => {});
   }, []);
+
+  // OTP Resend Countdown Timer
+  useEffect(() => {
+    if (otpCountdown <= 0) return;
+    const timer = setInterval(() => {
+      setOtpCountdown(prev => prev - 1);
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [otpCountdown]);
 
   // Handlers for Human Review Decisions
   const handleReviewDecision = async (action: 'APPROVE' | 'REJECT' | 'NEEDS_INFO') => {
@@ -185,6 +240,93 @@ NTPC,NTPC-ELEC-805,Copper armored cable 3C x 16 Sqmm,Copper Cable Armoured 3 Cor
   };
 
   // Authentication Handlers
+  const handleGoogleSignIn = async () => {
+    setAuthError(null);
+    setGoogleLoading(true);
+    try {
+      const res = await signInWithGoogle();
+      if (res.success && res.user) {
+        setRole(loginRole);
+        if (loginRole === 'cpse') {
+          setSelectedCpse(loginCpse);
+        }
+        setUserEmail(res.user.email || '');
+        setCurrentUserName(res.user.displayName || (res.user.email ? res.user.email.split('@')[0] : 'Google User'));
+        setCurrentUserPhoto(res.user.photoURL);
+        setAuthProviderType('google');
+        setIsLoggedIn(true);
+        setActiveTab('dashboard');
+      } else {
+        setAuthError(res.error || 'Failed to authenticate with Google.');
+      }
+    } catch (err: any) {
+      setAuthError(err.message || 'Google Sign-In failed.');
+    } finally {
+      setGoogleLoading(false);
+    }
+  };
+
+  const handleSendOtp = async (e?: FormEvent) => {
+    if (e) e.preventDefault();
+    setAuthError(null);
+    setOtpSuccessMsg(null);
+
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!loginEmail || !emailRegex.test(loginEmail.trim())) {
+      setAuthError("Please enter a valid email address to receive the verification code.");
+      return;
+    }
+
+    setOtpLoading(true);
+    try {
+      const res = await sendEmailOtp(loginEmail.trim());
+      if (res.success) {
+        setAuthStep('otp-verify');
+        setOtpSuccessMsg(res.message || `Real 6-digit OTP code dispatched to ${loginEmail}.`);
+        setOtpCountdown(60);
+      } else {
+        setAuthError(res.error || "Failed to deliver OTP email.");
+      }
+    } catch (err: any) {
+      setAuthError(err.message || "Failed to contact OTP service.");
+    } finally {
+      setOtpLoading(false);
+    }
+  };
+
+  const handleVerifyOtp = async (e: FormEvent) => {
+    e.preventDefault();
+    setAuthError(null);
+
+    if (!otpCode || otpCode.trim().length !== 6) {
+      setAuthError("Please enter the 6-digit OTP code sent to your email.");
+      return;
+    }
+
+    setOtpLoading(true);
+    try {
+      const res = await verifyEmailOtp(loginEmail.trim(), otpCode.trim());
+      if (res.success) {
+        setRole(loginRole);
+        if (loginRole === 'cpse') {
+          setSelectedCpse(loginCpse);
+        }
+        setUserEmail(loginEmail.trim());
+        setCurrentUserName(loginEmail.split('@')[0]);
+        setCurrentUserPhoto(null);
+        setAuthProviderType('email-otp');
+        setIsLoggedIn(true);
+        setActiveTab('dashboard');
+      } else {
+        setAuthError(res.error || "Incorrect or expired verification code.");
+      }
+    } catch (err: any) {
+      setAuthError(err.message || "Failed to verify OTP.");
+    } finally {
+      setOtpLoading(false);
+    }
+  };
+
   const handleLogin = (e: FormEvent) => {
     e.preventDefault();
     setAuthError(null);
@@ -203,6 +345,9 @@ NTPC,NTPC-ELEC-805,Copper armored cable 3C x 16 Sqmm,Copper Cable Armoured 3 Cor
       setSelectedCpse(loginCpse);
     }
     setUserEmail(loginEmail);
+    setCurrentUserName(loginEmail.split('@')[0]);
+    setCurrentUserPhoto(null);
+    setAuthProviderType('credential');
     setIsLoggedIn(true);
     setAuthError(null);
     setActiveTab('dashboard');
@@ -213,6 +358,9 @@ NTPC,NTPC-ELEC-805,Copper armored cable 3C x 16 Sqmm,Copper Cable Armoured 3 Cor
     if (selectedType === 'admin') {
       setRole('admin');
       setUserEmail('sih.admin@ministry.gov.in');
+      setCurrentUserName('National Administrator');
+      setCurrentUserPhoto(null);
+      setAuthProviderType('credential');
       setIsLoggedIn(true);
       setActiveTab('dashboard');
     } else {
@@ -220,9 +368,27 @@ NTPC,NTPC-ELEC-805,Copper armored cable 3C x 16 Sqmm,Copper Cable Armoured 3 Cor
       const selected = cpseName || 'ONGC';
       setSelectedCpse(selected);
       setUserEmail(`${selected.toLowerCase().replace(/\s+/g, '')}.liaison@cpse.gov.in`);
+      setCurrentUserName(`${selected} Liaison Officer`);
+      setCurrentUserPhoto(null);
+      setAuthProviderType('credential');
       setIsLoggedIn(true);
       setActiveTab('dashboard');
     }
+  };
+
+  const handleLogout = async () => {
+    try {
+      await signOutFirebase();
+    } catch (e) {}
+    setIsLoggedIn(false);
+    setUserEmail('');
+    setCurrentUserName(null);
+    setCurrentUserPhoto(null);
+    setAuthProviderType(null);
+    setAuthStep('input');
+    setOtpCode('');
+    setOtpSuccessMsg(null);
+    setAuthError(null);
   };
 
   const handleBulkApprove = async () => {
@@ -471,65 +637,68 @@ NTPC,NTPC-ELEC-805,Copper armored cable 3C x 16 Sqmm,Copper Cable Armoured 3 Cor
           </div>
         </div>
         
-        {/* Right Column: Interactive Login form & Presentation Profile Selector */}
-        <div className="flex-1 flex flex-col justify-center items-center px-6 py-12 md:p-20 bg-slate-950">
-          <div className="w-full max-w-md space-y-8">
+        {/* Right Column: Interactive Authentication Panel */}
+        <div className="flex-1 flex flex-col justify-center items-center px-6 py-12 md:p-16 bg-slate-950">
+          <div className="w-full max-w-md space-y-6">
             
             <div className="space-y-2 text-center md:text-left">
-              <h3 className="text-3xl font-black text-white tracking-tight">Access National Portal</h3>
+              <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-blue-500/10 border border-blue-500/20 text-blue-400 text-[10px] font-bold uppercase tracking-wider">
+                <Sparkles className="w-3 h-3 text-blue-400" />
+                <span>Enterprise Identity & Access</span>
+              </div>
+              <h3 className="text-2xl md:text-3xl font-black text-white tracking-tight">Access National Portal</h3>
               <p className="text-slate-400 text-xs font-semibold leading-relaxed">
-                Log in with your ministry admin credentials or your designated CPSE Liaison profile.
+                Sign in securely with Google OAuth or verify using a real 6-digit Email OTP.
               </p>
             </div>
             
             {authError && (
-              <div className="p-3 bg-red-950/40 border border-red-900/50 rounded-xl text-red-400 text-xs flex items-center gap-2 font-semibold animate-shake">
-                <XCircle className="w-4 h-4 text-red-500 shrink-0" />
-                <span>{authError}</span>
+              <div className="p-3 bg-red-950/50 border border-red-900/60 rounded-xl text-red-300 text-xs flex items-center gap-2.5 font-semibold animate-in fade-in slide-in-from-top-1 duration-200">
+                <XCircle className="w-4 h-4 text-red-400 shrink-0" />
+                <span className="leading-tight">{authError}</span>
               </div>
             )}
-            
-            <form onSubmit={handleLogin} className="space-y-5">
-              
-              {/* Access Role Tab Toggles */}
-              <div>
-                <label className="block text-xs font-black text-slate-400 uppercase tracking-wider mb-2">Access Portal Persona</label>
-                <div className="grid grid-cols-2 gap-3">
-                  <button
-                    type="button"
-                    onClick={() => setLoginRole('admin')}
-                    className={`py-3 px-4 rounded-xl text-xs font-bold transition-all border flex items-center justify-center gap-2 ${
-                      loginRole === 'admin'
-                        ? 'bg-blue-600/15 border-blue-500 text-blue-400 font-extrabold shadow-sm'
-                        : 'bg-slate-900 border-slate-800/60 text-slate-400 hover:text-white hover:border-slate-700'
-                    }`}
-                  >
-                    <ShieldCheck className="w-4 h-4" />
-                    Ministry Admin
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setLoginRole('cpse')}
-                    className={`py-3 px-4 rounded-xl text-xs font-bold transition-all border flex items-center justify-center gap-2 ${
-                      loginRole === 'cpse'
-                        ? 'bg-teal-600/15 border-teal-500 text-teal-400 font-extrabold shadow-sm'
-                        : 'bg-slate-900 border-slate-800/60 text-slate-400 hover:text-white hover:border-slate-700'
-                    }`}
-                  >
-                    <Building2 className="w-4 h-4" />
-                    CPSE User
-                  </button>
-                </div>
+
+            {/* Persona Selector (Ministry Admin vs CPSE Liaison) */}
+            <div className="bg-slate-900/80 p-4 rounded-2xl border border-slate-800/80 space-y-3">
+              <label className="block text-[11px] font-black text-slate-400 uppercase tracking-wider">
+                1. Select Portal Authority Persona
+              </label>
+              <div className="grid grid-cols-2 gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => setLoginRole('admin')}
+                  className={`py-2.5 px-3 rounded-xl text-xs font-bold transition-all border flex items-center justify-center gap-2 cursor-pointer ${
+                    loginRole === 'admin'
+                      ? 'bg-blue-600/20 border-blue-500 text-blue-300 font-extrabold shadow-sm'
+                      : 'bg-slate-950/60 border-slate-800 text-slate-400 hover:text-white hover:border-slate-700'
+                  }`}
+                >
+                  <ShieldCheck className="w-4 h-4 text-blue-400" />
+                  Ministry Admin
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setLoginRole('cpse')}
+                  className={`py-2.5 px-3 rounded-xl text-xs font-bold transition-all border flex items-center justify-center gap-2 cursor-pointer ${
+                    loginRole === 'cpse'
+                      ? 'bg-teal-600/20 border-teal-500 text-teal-300 font-extrabold shadow-sm'
+                      : 'bg-slate-950/60 border-slate-800 text-slate-400 hover:text-white hover:border-slate-700'
+                  }`}
+                >
+                  <Building2 className="w-4 h-4 text-teal-400" />
+                  CPSE Liaison
+                </button>
               </div>
 
               {/* CPSE Organization dropdown */}
               {loginRole === 'cpse' && (
-                <div className="space-y-1.5 animate-in fade-in slide-in-from-top-2 duration-200">
-                  <label className="block text-xs font-black text-slate-400 uppercase tracking-wider">Select Liaison Authority</label>
+                <div className="space-y-1 pt-1 animate-in fade-in slide-in-from-top-1 duration-200">
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">Designated PSU Enterprise</label>
                   <select
                     value={loginCpse}
                     onChange={(e) => setLoginCpse(e.target.value)}
-                    className="w-full bg-slate-900 border border-slate-800 rounded-xl px-4 py-3 text-xs font-semibold text-slate-200 focus:outline-hidden focus:border-slate-700 focus:ring-1 focus:ring-teal-500"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs font-semibold text-slate-200 focus:outline-hidden focus:border-teal-500"
                   >
                     <option value="ONGC">ONGC (Oil & Natural Gas Corporation)</option>
                     <option value="IOCL">IOCL (Indian Oil Corporation Ltd)</option>
@@ -540,71 +709,249 @@ NTPC,NTPC-ELEC-805,Copper armored cable 3C x 16 Sqmm,Copper Cable Armoured 3 Cor
                   </select>
                 </div>
               )}
-              
-              {/* Email Address */}
-              <div className="space-y-1.5">
-                <label className="block text-xs font-black text-slate-400 uppercase tracking-wider">Gmail or Corporate Email</label>
-                <div className="relative">
-                  <Mail className="absolute left-3.5 top-3.5 w-4 h-4 text-slate-500" />
-                  <input
-                    type="email"
-                    required
-                    placeholder={loginRole === 'admin' ? "sih.admin@ministry.gov.in" : "liaison@ongc.gov.in"}
-                    value={loginEmail}
-                    onChange={(e) => setLoginEmail(e.target.value)}
-                    className="w-full bg-slate-900 border border-slate-800 rounded-xl pl-10 pr-4 py-3 text-xs text-slate-200 placeholder:text-slate-700 focus:outline-hidden focus:border-slate-700"
-                  />
-                </div>
-              </div>
-              
-              {/* Password */}
-              <div className="space-y-1.5">
-                <label className="block text-xs font-black text-slate-400 uppercase tracking-wider">Portal Access Password</label>
-                <div className="relative">
-                  <Lock className="absolute left-3.5 top-3.5 w-4 h-4 text-slate-500" />
-                  <input
-                    type="password"
-                    required
-                    placeholder="••••••••"
-                    value={loginPassword}
-                    onChange={(e) => setLoginPassword(e.target.value)}
-                    className="w-full bg-slate-900 border border-slate-800 rounded-xl pl-10 pr-4 py-3 text-xs text-slate-200 placeholder:text-slate-700 focus:outline-hidden focus:border-slate-700"
-                  />
-                </div>
-              </div>
-              
+            </div>
+
+            {/* Authentication Method Tabs */}
+            <div className="flex border-b border-slate-800 text-xs font-bold">
               <button
-                type="submit"
-                className={`w-full py-3 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center justify-center gap-2 ${
-                  loginRole === 'admin'
-                    ? 'bg-blue-600 hover:bg-blue-500 text-white shadow-md shadow-blue-950/50'
-                    : 'bg-teal-600 hover:bg-teal-500 text-white shadow-md shadow-teal-950/50'
+                type="button"
+                onClick={() => { setAuthTab('google-otp'); setAuthError(null); }}
+                className={`pb-2.5 px-3 border-b-2 transition-all cursor-pointer flex items-center gap-2 ${
+                  authTab === 'google-otp'
+                    ? 'border-blue-500 text-blue-400 font-extrabold'
+                    : 'border-transparent text-slate-400 hover:text-slate-200'
                 }`}
               >
-                Sign In to Platform
+                <KeyRound className="w-3.5 h-3.5" />
+                Google & Real Email OTP
               </button>
-            </form>
-            
-            {/* Quick-Access Demo Profiles Panel */}
-            <div className="border-t border-slate-900 pt-6">
-              <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-3 text-center">Quick-Access Demo Profiles (For PPT & Live Presentation)</p>
-              <div className="grid grid-cols-2 gap-3">
-                <button
-                  onClick={() => handleQuickLogin('admin')}
-                  className="p-3 rounded-xl bg-slate-900/60 hover:bg-slate-900 text-xs text-blue-400 font-bold border border-blue-950/40 text-left flex flex-col justify-between h-16 transition-all"
-                >
-                  <span className="uppercase text-[8px] text-slate-500 font-bold block">Ministry Admin view</span>
-                  <span className="truncate font-black text-[10px]">sih.admin@gov.in</span>
-                </button>
-                <button
-                  onClick={() => handleQuickLogin('cpse', 'ONGC')}
-                  className="p-3 rounded-xl bg-slate-900/60 hover:bg-slate-900 text-xs text-teal-400 font-bold border border-teal-950/40 text-left flex flex-col justify-between h-16 transition-all"
-                >
-                  <span className="uppercase text-[8px] text-slate-500 font-bold block">ONGC Liaison view</span>
-                  <span className="truncate font-black text-[10px]">ongc.liaison@cpse.gov.in</span>
-                </button>
-              </div>
+              <button
+                type="button"
+                onClick={() => { setAuthTab('password'); setAuthError(null); }}
+                className={`pb-2.5 px-3 border-b-2 transition-all cursor-pointer flex items-center gap-2 ${
+                  authTab === 'password'
+                    ? 'border-blue-500 text-blue-400 font-extrabold'
+                    : 'border-transparent text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                <Lock className="w-3.5 h-3.5" />
+                Password & Demo
+              </button>
             </div>
+
+            {/* TAB 1: GOOGLE SIGN-IN & REAL EMAIL OTP */}
+            {authTab === 'google-otp' && (
+              <div className="space-y-4 animate-in fade-in duration-200">
+                
+                {/* 1. Firebase Google OAuth Button */}
+                <div>
+                  <button
+                    type="button"
+                    onClick={handleGoogleSignIn}
+                    disabled={googleLoading}
+                    className="w-full py-3 px-4 rounded-xl bg-white hover:bg-slate-100 text-slate-900 border border-slate-200 text-xs font-black uppercase tracking-wider transition-all flex items-center justify-center gap-3 shadow-md active:scale-[0.99] disabled:opacity-60 cursor-pointer"
+                  >
+                    <GoogleIcon />
+                    <span>{googleLoading ? "Connecting to Google..." : "Sign in with Google"}</span>
+                  </button>
+                  <p className="text-[10px] text-center text-slate-500 mt-1.5 font-medium">
+                    Powered by Firebase Authentication OAuth 2.0
+                  </p>
+                </div>
+
+                {/* Divider */}
+                <div className="relative flex py-1 items-center">
+                  <div className="flex-grow border-t border-slate-800"></div>
+                  <span className="flex-shrink mx-3 text-[10px] font-black uppercase tracking-wider text-slate-500">
+                    Or Real Email OTP
+                  </span>
+                  <div className="flex-grow border-t border-slate-800"></div>
+                </div>
+
+                {/* 2. Real Email OTP Section */}
+                {authStep === 'input' ? (
+                  <form onSubmit={handleSendOtp} className="space-y-3.5">
+                    <div className="space-y-1.5">
+                      <label className="block text-[11px] font-black text-slate-400 uppercase tracking-wider">
+                        Official or Personal Email
+                      </label>
+                      <div className="relative">
+                        <Mail className="absolute left-3.5 top-3.5 w-4 h-4 text-slate-500" />
+                        <input
+                          type="email"
+                          required
+                          placeholder={loginRole === 'admin' ? "sih.admin@ministry.gov.in" : "liaison@ongc.gov.in"}
+                          value={loginEmail}
+                          onChange={(e) => setLoginEmail(e.target.value)}
+                          className="w-full bg-slate-900 border border-slate-800 rounded-xl pl-10 pr-4 py-3 text-xs text-slate-200 placeholder:text-slate-600 focus:outline-hidden focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                        />
+                      </div>
+                    </div>
+
+                    {smtpStatus && !smtpStatus.smtpConfigured && (
+                      <div className="p-3 bg-amber-950/40 border border-amber-800/40 rounded-xl text-amber-300 text-xs flex items-start gap-2.5">
+                        <Info className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                        <div className="text-[11px] leading-relaxed">
+                          <strong className="block text-amber-200">Real Email Dispatch Notice:</strong>
+                          To send real emails to this address, add your <code className="bg-amber-900/60 px-1 py-0.5 rounded text-amber-100 font-mono">SMTP_USER</code> and <code className="bg-amber-900/60 px-1 py-0.5 rounded text-amber-100 font-mono">SMTP_PASS</code> (or Gmail App Password) to the <code className="bg-amber-900/60 px-1 py-0.5 rounded text-amber-100 font-mono">.env</code> file.
+                        </div>
+                      </div>
+                    )}
+
+                    <button
+                      type="submit"
+                      disabled={otpLoading}
+                      className={`w-full py-3 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center justify-center gap-2 cursor-pointer ${
+                        loginRole === 'admin'
+                          ? 'bg-blue-600 hover:bg-blue-500 text-white shadow-md shadow-blue-950/50'
+                          : 'bg-teal-600 hover:bg-teal-500 text-white shadow-md shadow-teal-950/50'
+                      } disabled:opacity-60`}
+                    >
+                      <KeyRound className="w-4 h-4" />
+                      {otpLoading ? "Delivering OTP..." : "Send Real 6-Digit OTP to Email"}
+                    </button>
+                  </form>
+                ) : (
+                  <form onSubmit={handleVerifyOtp} className="space-y-4 animate-in fade-in duration-200">
+                    {otpSuccessMsg && (
+                      <div className="p-3 bg-emerald-950/50 border border-emerald-800/60 rounded-xl text-emerald-300 text-xs flex items-center gap-2 font-medium">
+                        <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                        <span className="truncate">{otpSuccessMsg}</span>
+                      </div>
+                    )}
+
+                    <div className="space-y-2 text-center">
+                      <label className="block text-xs font-black text-slate-300 uppercase tracking-wider">
+                        Enter 6-Digit Code Sent to Your Inbox
+                      </label>
+                      <input
+                        type="text"
+                        maxLength={6}
+                        autoFocus
+                        required
+                        placeholder="••••••"
+                        value={otpCode}
+                        onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, ''))}
+                        className="w-full bg-slate-900 border border-slate-700 rounded-xl py-3 px-4 text-center font-mono text-2xl tracking-[0.5em] text-white focus:outline-hidden focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500"
+                      />
+                      <p className="text-[11px] text-slate-400">
+                        Check inbox & spam for <span className="text-slate-200 font-bold">{loginEmail}</span>
+                      </p>
+                    </div>
+
+                    <button
+                      type="submit"
+                      disabled={otpLoading || otpCode.length !== 6}
+                      className="w-full py-3 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-500 text-white shadow-md shadow-emerald-950/50 disabled:opacity-50 cursor-pointer"
+                    >
+                      <Check className="w-4 h-4" />
+                      {otpLoading ? "Verifying..." : "Verify OTP & Enter Portal"}
+                    </button>
+
+                    <div className="flex items-center justify-between pt-1 text-xs">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setAuthStep('input');
+                          setOtpCode('');
+                          setAuthError(null);
+                        }}
+                        className="text-slate-400 hover:text-white transition font-medium cursor-pointer"
+                      >
+                        ← Change Email
+                      </button>
+
+                      {otpCountdown > 0 ? (
+                        <span className="text-slate-400 text-[11px] font-medium flex items-center gap-1">
+                          <Clock className="w-3 h-3 text-slate-500" /> Resend in {otpCountdown}s
+                        </span>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => handleSendOtp()}
+                          disabled={otpLoading}
+                          className="text-blue-400 hover:text-blue-300 font-bold transition flex items-center gap-1 cursor-pointer"
+                        >
+                          <RefreshCw className="w-3 h-3" /> Resend Code
+                        </button>
+                      )}
+                    </div>
+                  </form>
+                )}
+
+              </div>
+            )}
+
+            {/* TAB 2: PASSWORD & PRESENTATION DEMO */}
+            {authTab === 'password' && (
+              <div className="space-y-4 animate-in fade-in duration-200">
+                <form onSubmit={handleLogin} className="space-y-3.5">
+                  <div className="space-y-1.5">
+                    <label className="block text-[11px] font-black text-slate-400 uppercase tracking-wider">Email Address</label>
+                    <div className="relative">
+                      <Mail className="absolute left-3.5 top-3.5 w-4 h-4 text-slate-500" />
+                      <input
+                        type="email"
+                        required
+                        placeholder={loginRole === 'admin' ? "sih.admin@ministry.gov.in" : "liaison@ongc.gov.in"}
+                        value={loginEmail}
+                        onChange={(e) => setLoginEmail(e.target.value)}
+                        className="w-full bg-slate-900 border border-slate-800 rounded-xl pl-10 pr-4 py-3 text-xs text-slate-200 placeholder:text-slate-700 focus:outline-hidden focus:border-slate-700"
+                      />
+                    </div>
+                  </div>
+                  
+                  <div className="space-y-1.5">
+                    <label className="block text-[11px] font-black text-slate-400 uppercase tracking-wider">Access Password</label>
+                    <div className="relative">
+                      <Lock className="absolute left-3.5 top-3.5 w-4 h-4 text-slate-500" />
+                      <input
+                        type="password"
+                        required
+                        placeholder="••••••••"
+                        value={loginPassword}
+                        onChange={(e) => setLoginPassword(e.target.value)}
+                        className="w-full bg-slate-900 border border-slate-800 rounded-xl pl-10 pr-4 py-3 text-xs text-slate-200 placeholder:text-slate-700 focus:outline-hidden focus:border-slate-700"
+                      />
+                    </div>
+                  </div>
+                  
+                  <button
+                    type="submit"
+                    className={`w-full py-3 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center justify-center gap-2 cursor-pointer ${
+                      loginRole === 'admin'
+                        ? 'bg-blue-600 hover:bg-blue-500 text-white shadow-md shadow-blue-950/50'
+                        : 'bg-teal-600 hover:bg-teal-500 text-white shadow-md shadow-teal-950/50'
+                    }`}
+                  >
+                    Sign In with Password
+                  </button>
+                </form>
+
+                {/* Quick-Access Demo Profiles Panel */}
+                <div className="border-t border-slate-900 pt-4">
+                  <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2.5 text-center">
+                    Quick-Access Demo Profiles (For PPT & Live Presentation)
+                  </p>
+                  <div className="grid grid-cols-2 gap-2.5">
+                    <button
+                      onClick={() => handleQuickLogin('admin')}
+                      className="p-3 rounded-xl bg-slate-900/60 hover:bg-slate-900 text-xs text-blue-400 font-bold border border-blue-950/40 text-left flex flex-col justify-between h-16 transition-all cursor-pointer"
+                    >
+                      <span className="uppercase text-[8px] text-slate-500 font-bold block">Ministry Admin view</span>
+                      <span className="truncate font-black text-[10px]">sih.admin@gov.in</span>
+                    </button>
+                    <button
+                      onClick={() => handleQuickLogin('cpse', 'ONGC')}
+                      className="p-3 rounded-xl bg-slate-900/60 hover:bg-slate-900 text-xs text-teal-400 font-bold border border-teal-950/40 text-left flex flex-col justify-between h-16 transition-all cursor-pointer"
+                    >
+                      <span className="uppercase text-[8px] text-slate-500 font-bold block">ONGC Liaison view</span>
+                      <span className="truncate font-black text-[10px]">ongc.liaison@cpse.gov.in</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
             
           </div>
         </div>
@@ -672,30 +1019,69 @@ NTPC,NTPC-ELEC-805,Copper armored cable 3C x 16 Sqmm,Copper Cable Armoured 3 Cor
         </div>
 
         {/* Sidebar Footer Role Card */}
-        <div className="p-4 border-t border-slate-800 bg-slate-900/50 space-y-3">
-          <div className="p-3 bg-slate-800/40 rounded-lg border border-slate-700/50">
-            <p className="text-[10px] text-slate-400 uppercase tracking-widest font-bold">Active Persona</p>
-            <p className="text-xs text-white mt-0.5 font-bold">
-              {role === 'admin' ? 'National Administrator' : `${selectedCpse} Liaison Officer`}
-            </p>
-            {userEmail && (
-              <p className="text-[10px] text-blue-300 truncate mt-1">{userEmail}</p>
-            )}
-            <div className="mt-3 flex items-center gap-2">
-              <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
-              <span className="text-[10px] text-slate-300 font-semibold">6 PSUs Synced Live</span>
+        {/* Sidebar Footer Role Card */}
+        <div className="p-4 border-t border-slate-800 bg-slate-900/60 space-y-3">
+          <div className="p-3 bg-slate-800/40 rounded-xl border border-slate-700/50 space-y-2">
+            
+            {/* User Profile Header with Photo/Avatar */}
+            <div className="flex items-center gap-2.5">
+              {currentUserPhoto ? (
+                <img
+                  src={currentUserPhoto}
+                  alt={currentUserName || "User Avatar"}
+                  className="w-8 h-8 rounded-full border border-blue-400 object-cover shrink-0"
+                />
+              ) : (
+                <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-black text-white shrink-0 ${
+                  role === 'admin' ? 'bg-blue-600' : 'bg-teal-600'
+                }`}>
+                  {currentUserName ? currentUserName.charAt(0).toUpperCase() : (role === 'admin' ? 'A' : 'C')}
+                </div>
+              )}
+
+              <div className="min-w-0 flex-1">
+                <p className="text-xs font-bold text-white truncate">
+                  {currentUserName || (role === 'admin' ? 'National Administrator' : `${selectedCpse} Liaison`)}
+                </p>
+                {userEmail && (
+                  <p className="text-[10px] text-slate-400 truncate">{userEmail}</p>
+                )}
+              </div>
             </div>
+
+            {/* Verification Status Badge */}
+            <div className="pt-1 flex items-center justify-between border-t border-slate-700/40">
+              {authProviderType === 'google' ? (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[9px] font-extrabold bg-blue-500/15 text-blue-400 border border-blue-500/30">
+                  <GoogleIcon /> Google Verified
+                </span>
+              ) : authProviderType === 'email-otp' ? (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[9px] font-extrabold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
+                  <CheckCircle2 className="w-2.5 h-2.5 text-emerald-400" /> Real OTP Verified
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[9px] font-extrabold bg-slate-700/30 text-slate-300 border border-slate-600/40">
+                  <ShieldCheck className="w-2.5 h-2.5 text-slate-400" /> Enterprise Session
+                </span>
+              )}
+
+              <div className="flex items-center gap-1.5">
+                <div className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse"></div>
+                <span className="text-[9px] text-slate-400 font-semibold">Live</span>
+              </div>
+            </div>
+
+            <p className="text-[10px] text-slate-400 font-medium">
+              Role: <strong className="text-slate-200">{role === 'admin' ? 'Ministry Admin' : `${selectedCpse} Representative`}</strong>
+            </p>
           </div>
           
           <button
-            onClick={() => {
-              setIsLoggedIn(false);
-              setUserEmail('');
-              setLoginEmail('');
-              setLoginPassword('');
-            }}
-            className="w-full py-1.5 px-3 rounded-md bg-red-950/40 hover:bg-red-900/30 text-red-400 border border-red-900/30 text-[10px] font-bold uppercase tracking-wider transition-all"
+            type="button"
+            onClick={handleLogout}
+            className="w-full py-2 px-3 rounded-lg bg-red-950/40 hover:bg-red-900/40 text-red-300 hover:text-white border border-red-900/40 text-[10px] font-extrabold uppercase tracking-wider transition-all flex items-center justify-center gap-1.5 cursor-pointer"
           >
+            <LogOut className="w-3.5 h-3.5" />
             Sign Out of Portal
           </button>
         </div>
